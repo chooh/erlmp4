@@ -44,13 +44,8 @@ read_atoms(File, Pos, End, Atoms) when (End > Pos) or (End == 0) ->
 read_atoms(_File, _Pos, _End, Atoms) ->
     Atoms.
 
-find_atom(Type, Atoms) ->
-    case lists:filter(fun(X) -> X#mp4_atom.type == Type end, Atoms) of
-        [H|_] ->
-            H;
-        [] ->
-            {error, not_found}
-     end.
+find_atoms(Type, Atoms) ->
+    lists:filter(fun(X) -> X#mp4_atom.type == Type end, Atoms).
 
 pp_atoms(Atoms) ->
     lists:foreach(fun(X) -> io:format("Atom [~s], Start ~w, Length ~w~n", [
@@ -62,7 +57,7 @@ main(FileName, _StartTime) ->
     RootAtoms = read_atoms(File),
     io:format("Root atoms:~n", []),
     pp_atoms(RootAtoms),
-    MoovAtom = find_atom("moov", RootAtoms),
+    [MoovAtom|_] = find_atoms("moov", RootAtoms),
     MoovAtoms = read_atoms(File, MoovAtom#mp4_atom.start + ?ATOM_PREAMBLE_SIZE, MoovAtom#mp4_atom.start + MoovAtom#mp4_atom.size_base),
     io:format("Moov atoms:~n", []),
     pp_atoms(MoovAtoms),
