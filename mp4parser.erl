@@ -1,5 +1,6 @@
 -module(mp4parser).
--export([main/2]).
+%-export([main/2]).
+-compile(export_all).
 
 -define(ATOM_PREAMBLE_SIZE, 8).
 
@@ -12,7 +13,7 @@
 
 -record(moov_atom, {
     mvhd,
-    tracks}).
+    traks}).
 
 -record(mvhd_atom, {
     version,
@@ -28,9 +29,40 @@
     predefined,
     next_track_id}).
 
+-record(tkhd_atom, {
+    version,
+    flags,
+    creation_time,
+    modification_time,
+    track_id,
+    duration,
+    layer,
+    predefined,
+    volume,
+    matrix,
+    width,
+    height}).
+
+-record(mdia_atom, {
+    mdhd,
+    hdlr,
+    minf}).
+
+-record(minf_atom, {
+    vmhd,
+    stbl}).
+
+-record(hdlr_atom, {
+    version,
+    flags,
+    predefined,
+    handler_type,
+    component_name}).
+
+
 -record(trak_atom, {
-    tkhd_atom,
-    mdia_atom,
+    tkhd,
+    mdia,
     chunks_size,
     chunks,
     samples_size,
@@ -54,7 +86,7 @@ read_atoms(File) ->
     read_atoms(File, 0, 0, []).
 
 read_atoms(File, Atom) ->
-    read_atoms(File, Atom#mp4_atom.start + ?ATOM_PREAMBLE_SIZE, Atom#mp4_atom.size_base).
+    read_atoms(File, Atom#mp4_atom.start + ?ATOM_PREAMBLE_SIZE, Atom#mp4_atom.start + Atom#mp4_atom.size_base - ?ATOM_PREAMBLE_SIZE).
 
 read_atoms(File, Pos, End) ->
     read_atoms(File, Pos, End, []).
@@ -69,10 +101,32 @@ read_atoms(File, Pos, End, Atoms) when (End > Pos) or (End == 0) ->
     end;
 
 read_atoms(_File, _Pos, _End, Atoms) ->
+    pp_atoms(Atoms),
     Atoms.
 
 find_atoms(Type, Atoms) ->
     lists:filter(fun(X) -> X#mp4_atom.type == Type end, Atoms).
+
+find_atom(Type, Atoms) ->
+    [Return|_] = find_atoms(Type, Atoms),
+    Return.
+
+parse_atom(File, Atom) ->
+    parse_atom(File, Atom, Atom#mp4_atom.type).
+
+parse_atom(File, Atom, "moov") ->
+    Children = read_atoms(File, Atom),
+    MvhdAtom = parse_atom(File, find_atom("mvhd", Children)),
+    TrakAtoms = lists:map(fun(A) -> parse_atom(File, A) end, find_atoms("trak", Children)),
+    #moov_atom{
+        mvhd=MvhdAtom,
+        traks=TrakAtoms};
+
+parse_atom(File, Atom, "trak") ->
+    Children = read_atoms(File, Atom),
+    TkhdAtom = parse_atom(File, find_atom("tkhd", Children)),
+    #trak_atom{
+        tkhd=TkhdAtom};
 
 parse_atom(File, Atom, "mvhd") ->
     case file:pread(File, Atom#mp4_atom.start, Atom#mp4_atom.size_base) of
@@ -88,7 +142,26 @@ parse_atom(File, Atom, "mvhd") ->
                 volume = PrefVolume,
                 matrix = Matrix,
                 next_track_id = NextTrackID}
+    end;
+
+parse_atom(File, Atom, "tkhd") ->
+    case file:pread(File, Atom#mp4_atom.start, Atom#mp4_atom.size_base) of
+        {ok, <<_Size:4/binary, "tkhd", Version:8, Flags:3/binary, CreationTime:32, ModificationTime:32, TrackID:32, _:4/binary, Duration:32, _:8/binary, Layer:16, AlternateGroup:16, Volume:16, _:2/binary, Matrix:36/binary, TrackWidth:32, TrackHeight:32>>} ->
+            #tkhd_atom{
+                version = Version,
+                flags = Flags,
+                creation_time = CreationTime,
+                modification_time = ModificationTime,
+                track_id = TrackID,
+                duration = Duration,
+                layer = Layer,
+                predefined = AlternateGroup,
+                volume = Volume,
+                matrix = Matrix,
+                width = TrackWidth,
+                height = TrackHeight}
     end.
+
 
 pp_atoms(Atoms) ->
     lists:foreach(fun(X) -> io:format("  Atom [~s], Start ~w, Length ~w~n", [
@@ -100,16 +173,7 @@ main(FileName, _StartTime) ->
     RootAtoms = read_atoms(File),
     io:format("Root atoms:~n", []),
     pp_atoms(RootAtoms),
-    [MoovAtom|_] = find_atoms("moov", RootAtoms),
-    MoovAtoms = read_atoms(File, MoovAtom),
-    io:format("Moov atoms:~n", []),
-    pp_atoms(MoovAtoms),
-    [MvhdAtom|_] = find_atoms("mvhd", MoovAtoms),
-    MvhdAtomFull = parse_atom(File, MvhdAtom, "mvhd"),
-    %io:format("Mvhd Atom:~n~p~n", [MvhdAtomFull]),
-    io:format("Timescale: ~w, Duration: ~w~n", [MvhdAtomFull#mvhd_atom.timescale, MvhdAtomFull#mvhd_atom.duration]),
-    io:format("Trak atoms:~n", []),
-    lists:foreach(fun(Atom) -> 
-        io:format("~p~n", [Atom]),
-        pp_atoms(read_atoms(File, Atom)) end, find_atoms("trak", MoovAtoms)),
-    file:close(File).
+    MoovAtom = parse_atom(File, find_atom("moov", RootAtoms)),
+    io:format("~p~n", [MoovAtom]),
+    file:close(File),
+    MoovAtom.
