@@ -68,6 +68,15 @@
     samples_size,
     samples}).
 
+-record(stbl_atom, {
+    stts,           % decoding time-to-sample
+    stss,           % sync sample
+    stsc,           % sample-to-chunk
+    stsz,           % sample size
+    stco,           % chunk offset
+    ctts}).         % composition time-to-sample
+
+
 -record(chunk, {
     sample,         % number of the first sample in the chunk
     size,           % number of samples in the chunk
@@ -160,7 +169,15 @@ parse_atom(File, Atom, "tkhd") ->
                 matrix = Matrix,
                 width = TrackWidth,
                 height = TrackHeight}
-    end.
+    end;
+
+parse_atom(File, Atom, "mdia") ->
+    Children = read_atoms(File, Atom),
+    MinfAtom = parse_atom(File, find_atom("minf", Children)),
+    #mdia_atom{
+       minf=MinfAtom}.
+
+%parse_atom(F:wq
 
 
 pp_atoms(Atoms) ->
