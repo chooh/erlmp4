@@ -1,5 +1,5 @@
 -module(moov).
--compile(export_all).
+-export([find_moov\1]).
 
 -define(ATOM_PREAMBLE_SIZE, 8).
 
