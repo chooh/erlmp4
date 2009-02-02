@@ -11,9 +11,10 @@ parse(<<>>, Acc) ->
     Acc;
 
 parse(<<108:32, "mvhd", Data:100/binary, Rest/binary>>, Acc) ->
-    <<_:16/binary, Duration:32/integer, _/binary>> = Data,
-    io:format("Found mvhd!!!, duration is ~p~n", [Duration]),
-    parse(Rest, lists:keystore(mvhdDuration, 1, Acc, {mvhdDuration, Duration}));
+    <<_:12/binary, Timescale:32/integer, Duration:32/integer, _/binary>> = Data,
+    io:format("Found mvhd!!!, duration is ~p, Timescale is ~p~n", [Duration, Timescale]),
+    MvhdData = [{mvhdDuration, Duration}, {mvhdTimescale, Timescale}],
+    parse(Rest, lists:keymerge(1, Acc, MvhdData));
 
 parse(<<92:32, "tkhd", Data:84/binary, Rest/binary>>, Acc) ->
      <<_Version:8, _Flags:3/binary, _CreationTime:32, _ModificationTime:32, _TrackID:32, _:4/binary, Duration:32, _:8/binary, _Layer:16, _AlternateGroup:16, _Volume:16, _:2/binary, _Matrix:36/binary, _TrackWidth:32, _TrackHeight:32>> = Data,
