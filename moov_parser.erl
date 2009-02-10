@@ -2,10 +2,12 @@
 -compile(export_all).
 
 -define(ATOM_PREAMBLE_SIZE, 8).
--define(CONTAINER_ATOMS, ["trak", "mdia", "minf"]).
+-define(CONTAINER_ATOMS, ["trak", "mdia", "minf", "stbl"]).
+-define(MAX_TRACKS, 2).
+-define(TIME_TO_SAMPLE_TABLE_ENTRY_SIZE, 8).
 
 parse(Bin) ->
-    parse(Bin, [{currentTrack, 0}]).
+    parse(Bin, [{currentTrack, 0}, {tracks, array:new(?MAX_TRACKS)}]).
 
 parse(<<>>, Acc) ->
     Acc;
@@ -21,7 +23,12 @@ parse(<<92:32, "tkhd", Data:84/binary, Rest/binary>>, Acc) ->
      io:format("Tkhd duration: ~p~n", [Duration]),
      parse(Rest, Acc);
 
-parse(<<32:32, "mdhd", Data:24/binary, Rest/binary>>, Acc) ->
+parse(<<32:32, "mdhd", _Data:24/binary, Rest/binary>>, Acc) ->
+    parse(Rest, Acc);
+
+parse(<<_Size:32/integer, "stts", _Version:8/integer, _Flags:24/integer, Entries:32/integer, TableAndRest/binary>>, Acc) ->
+    {TTSBinary, Rest} = split_binary(TableAndRest, Entries * ?TIME_TO_SAMPLE_TABLE_ENTRY_SIZE),
+    io:format("tts table found: ~p", [time_to_sample_parse(TTSBinary, [])]),
     parse(Rest, Acc);
 
 parse(<<_:4/binary, "trak", Rest/binary>>, Acc) ->
@@ -41,4 +48,10 @@ parse(Bin, Acc) ->
             {_, NextAtom} = split_binary(Bin, Size),
             parse(NextAtom, Acc)
     end.
+
+time_to_sample_parse(<<SampleCount:32/integer, SampleDuration:32/integer, Another/binary>>, Table) ->
+    time_to_sample_parse(Another, [{time_to_sample, SampleCount, SampleDuration}|Table]);
+
+time_to_sample_parse(<<>>, Table) ->
+    Table.
 
