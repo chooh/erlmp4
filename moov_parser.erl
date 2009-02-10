@@ -5,6 +5,7 @@
 -define(CONTAINER_ATOMS, ["trak", "mdia", "minf", "stbl"]).
 -define(MAX_TRACKS, 2).
 -define(TIME_TO_SAMPLE_TABLE_ENTRY_SIZE, 8).
+-define(SAMPLE_SIZE, 4).
 
 parse(Bin) ->
     parse(Bin, [{currentTrack, 0}, {tracks, array:new(?MAX_TRACKS)}]).
@@ -28,7 +29,12 @@ parse(<<32:32, "mdhd", _Data:24/binary, Rest/binary>>, Acc) ->
 
 parse(<<_Size:32/integer, "stts", _Version:8/integer, _Flags:24/integer, Entries:32/integer, TableAndRest/binary>>, Acc) ->
     {TTSBinary, Rest} = split_binary(TableAndRest, Entries * ?TIME_TO_SAMPLE_TABLE_ENTRY_SIZE),
-    io:format("tts table found: ~p", [time_to_sample_parse(TTSBinary, [])]),
+    io:format("stts table found: ~p~n", [time_to_sample_parse(TTSBinary, [])]),
+    parse(Rest, Acc);
+
+parse(<<_Size:32/integer, "stss", _Version:8/integer, _Flags:24/integer, Entries:32/integer, TableAndRest/binary>>, Acc) ->
+    {SSTBinary, Rest} = split_binary(TableAndRest, Entries * ?SAMPLE_SIZE),
+    io:format("stss table found: ~p~n", [sync_sample_parse(SSTBinary, [])]),
     parse(Rest, Acc);
 
 parse(<<_:4/binary, "trak", Rest/binary>>, Acc) ->
@@ -53,5 +59,11 @@ time_to_sample_parse(<<SampleCount:32/integer, SampleDuration:32/integer, Anothe
     time_to_sample_parse(Another, [{time_to_sample, SampleCount, SampleDuration}|Table]);
 
 time_to_sample_parse(<<>>, Table) ->
-    Table.
+    lists:reverse(Table).
+
+sync_sample_parse(<<SampleNumber:32/integer, Another/binary>>, Table) ->
+    sync_sample_parse(Another, [{sync_sample, SampleNumber}|Table]);
+
+sync_sample_parse(<<>>, Table) ->
+    lists:reverse(Table).
 
