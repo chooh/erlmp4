@@ -22,11 +22,11 @@ parse(<<108:32, "mvhd", Data:100/binary, Rest/binary>>, Acc) ->
 parse(<<92:32, "tkhd", Data:84/binary, Rest/binary>>, Acc) ->
      <<_Version:8, _Flags:3/binary, _CreationTime:32, _ModificationTime:32, _TrackID:32, _:4/binary, Duration:32, _:8/binary, _Layer:16, _AlternateGroup:16, _Volume:16, _:2/binary, _Matrix:36/binary, _TrackWidth:32, _TrackHeight:32>> = Data,
      io:format("Tkhd duration: ~p~n", [Duration]),
-     Track = get_current_track(Acc),
-     parse(Rest, set_current_track(Acc, lists:keymerge(1, Track, [{tkhdDuration, Duration}])));
+     parse(Rest, add_to_current_track(Acc, [{tkhdDuration, Duration}]));
 
-parse(<<32:32, "mdhd", _Data:24/binary, Rest/binary>>, Acc) ->
-    parse(Rest, Acc);
+parse(<<32:32, "mdhd", _Version:8, _Flags:24, _CreationTime:32, _ModificationTime:32, Timescale:32, Duration:32, _Language:16, _Quality:16, Rest/binary>>, Acc) ->
+    MdhdData = [{mdhdDuration, Duration}, {mdhdTimescale, Timescale}],
+    parse(Rest, add_to_current_track(Acc, MdhdData));
 
 parse(<<_Size:32/integer, "stts", _Version:8/integer, _Flags:24/integer, Entries:32/integer, TableAndRest/binary>>, Acc) ->
     {TTSBinary, Rest} = split_binary(TableAndRest, Entries * ?TIME_TO_SAMPLE_TABLE_ENTRY_SIZE),
@@ -81,4 +81,8 @@ set_current_track(Acc, Track) ->
     {CurTrack, TracksOld} = get_tracks(Acc),
     TracksNew = array:set(CurTrack - 1, Track, TracksOld),
     lists:keystore(tracks, 1, Acc, {tracks, TracksNew}).
+
+add_to_current_track(Acc, Tuple) ->
+    SortedTuple = lists:keysort(1, Tuple),
+    set_current_track(Acc, lists:keymerge(1, SortedTuple, get_current_track(Acc))).
 
