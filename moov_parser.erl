@@ -8,7 +8,7 @@
 -define(SAMPLE_SIZE, 4).
 
 parse(Bin) ->
-    parse(Bin, [{currentTrack, 0}, {tracks, array:new(?MAX_TRACKS)}]).
+    parse(Bin, [{currentTrack, 0}, {tracks, array:new([{size, ?MAX_TRACKS}, {default, []}])}]).
 
 parse(<<>>, Acc) ->
     Acc;
@@ -22,7 +22,8 @@ parse(<<108:32, "mvhd", Data:100/binary, Rest/binary>>, Acc) ->
 parse(<<92:32, "tkhd", Data:84/binary, Rest/binary>>, Acc) ->
      <<_Version:8, _Flags:3/binary, _CreationTime:32, _ModificationTime:32, _TrackID:32, _:4/binary, Duration:32, _:8/binary, _Layer:16, _AlternateGroup:16, _Volume:16, _:2/binary, _Matrix:36/binary, _TrackWidth:32, _TrackHeight:32>> = Data,
      io:format("Tkhd duration: ~p~n", [Duration]),
-     parse(Rest, Acc);
+     Track = get_current_track(Acc),
+     parse(Rest, set_current_track(Acc, lists:keymerge(1, Track, [{tkhdDuration, Duration}])));
 
 parse(<<32:32, "mdhd", _Data:24/binary, Rest/binary>>, Acc) ->
     parse(Rest, Acc);
@@ -66,4 +67,18 @@ sync_sample_parse(<<SampleNumber:32/integer, Another/binary>>, Table) ->
 
 sync_sample_parse(<<>>, Table) ->
     lists:reverse(Table).
+
+get_tracks(Acc) ->
+    {value, {currentTrack, CurTrack}} = lists:keysearch(currentTrack, 1,  Acc),
+    {value, {tracks, Tracks}} = lists:keysearch(tracks, 1 , Acc),
+    {CurTrack, Tracks}.
+
+get_current_track(Acc) ->
+    {CurTrack, Tracks} = get_tracks(Acc),
+    array:get(CurTrack, Tracks).
+
+set_current_track(Acc, Track) ->
+    {CurTrack, TracksOld} = get_tracks(Acc),
+    TracksNew = array:set(CurTrack, Track, TracksOld),
+    lists:keystore(tracks, 1, Acc, TracksNew).
 
