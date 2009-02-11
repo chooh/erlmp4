@@ -75,10 +75,10 @@ get_tracks(Acc) ->
 
 get_current_track(Acc) ->
     {CurTrack, Tracks} = get_tracks(Acc),
-    array:get(CurTrack, Tracks).
+    array:get(CurTrack - 1, Tracks).
 
 set_current_track(Acc, Track) ->
     {CurTrack, TracksOld} = get_tracks(Acc),
-    TracksNew = array:set(CurTrack, Track, TracksOld),
-    lists:keystore(tracks, 1, Acc, TracksNew).
+    TracksNew = array:set(CurTrack - 1, Track, TracksOld),
+    lists:keystore(tracks, 1, Acc, {tracks, TracksNew}).
 
