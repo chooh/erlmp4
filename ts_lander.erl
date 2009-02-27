@@ -5,10 +5,16 @@
 -define(HOST, "192.168.4.61").
 -define(PORT, 5001).
 -define(PATH, "/stream/ntv.ts").
--define(OUT_FILE, "out.mpg").
+
+% MP4Box -add video.264#video -add audio.aac#audio out.mp4
 
 start() ->
-    start(?HOST, ?PORT, ?PATH).
+    Pid = start(?HOST, ?PORT, ?PATH),
+    VideoPesExPid = start_pes_extractor(start_pes_writer("video.264")),
+    AudioPesExPid = start_pes_extractor(start_pes_writer("audio.aac")),
+    Pid ! {demuxer, {subscribe, 320, VideoPesExPid}},
+    Pid ! {demuxer, {subscribe, 400, AudioPesExPid}},
+    Pid.
 
 start(Host, Port, Path) ->
     spawn(fun() -> http_connect(Host, Port, Path, spawn_link(fun() -> demuxer(dict:new()) end)) end).
@@ -64,7 +70,7 @@ demuxer(State) ->
     receive
         {ts_packet, Packet} ->
             <<16#47:8, _:3, TsPid:13, _/binary>> = Packet,
-            %io:format("Found TS Pid ~p~n", [TsPid]),
+            io:format("Found TS Pid ~p~n", [TsPid]),
             case dict:find(TsPid, State) of
                 {ok, PesExtractorPid} ->
                     PesExtractorPid ! {ts_packet, Packet};
@@ -92,6 +98,7 @@ pes_extractor(State) ->
                 not Sync, PayloadStart == 1; Sync, PayloadStart /= 1 ->
                     {sync, true, [extract_ts_payload(AdaptationControl, Rest)|T], PesProcessorPid};
                 Sync, PayloadStart == 1 ->
+                    io:format("Found PES~n", []),
                     PesProcessorPid ! {pes_packet, list_to_binary(lists:reverse(T))},
                     {sync, true, [extract_ts_payload(AdaptationControl, Rest)], PesProcessorPid}
             end,
@@ -108,13 +115,11 @@ extract_ts_payload(AdaptationControl, Bin) ->
         _ -> Bin
     end.
 
-write_pes(Pes) ->
-    <<1:24/integer, StreamId:8/integer, PesPacketLength:16/integer, _/binary>> = Pes,
-    io:format("Found PES Data ~p StreamId ~p PES length ~p~n", [size(Pes), StreamId, PesPacketLength]).
-
 start_pes_writer(FileName) ->
-    {ok, File} = file:open(FileName, [write, raw, binary]),
-    spawn(fun() -> pes_writer(File) end).
+    spawn(fun() ->
+        {ok, File} = file:open(FileName, [write, raw, binary]),
+        pes_writer(File)
+    end).
 
 pes_writer(File) ->
     receive
@@ -122,8 +127,12 @@ pes_writer(File) ->
             <<1:24/integer, StreamId:8/integer, PesPacketLength:16/integer, Data/binary>> = Packet,
             io:format("Write PES Data ~p StreamId ~p PES length ~p~n", [size(Packet), StreamId, PesPacketLength]),
             case file:write(File, Data) of
-                ok -> pes_writer(File);
-                {error, Reason} -> exit(Reason)
+                ok ->
+                    io:format("OK write to file: ~n", []),
+                    pes_writer(File);
+                {error, Reason} ->
+                    io:format("Error write to file: ~p~n", [Reason]),
+                    exit(Reason)
             end
     end.
 
