@@ -2,8 +2,8 @@
 -compile(export_all).
 %-compile([native]).
 
--define(HOST, "192.168.4.61").
--define(PORT, 5001).
+-define(HOST, "192.168.4.110").
+-define(PORT, 7000).
 -define(PATH, "/stream/ntv.ts").
 
 % MP4Box -add video.264#video -add audio.aac#audio out.mp4
@@ -12,8 +12,8 @@ start() ->
     Pid = start(?HOST, ?PORT, ?PATH),
     VideoPesExPid = start_pes_extractor(start_pes_writer("video.264")),
     AudioPesExPid = start_pes_extractor(start_pes_writer("audio.aac")),
-    Pid ! {demuxer, {subscribe, 320, VideoPesExPid}},
-    Pid ! {demuxer, {subscribe, 400, AudioPesExPid}},
+    Pid ! {demuxer, {subscribe, 69, VideoPesExPid}},
+    Pid ! {demuxer, {subscribe, 68, AudioPesExPid}},
     Pid.
 
 start(Host, Port, Path) ->
@@ -124,8 +124,26 @@ start_pes_writer(FileName) ->
 pes_writer(File) ->
     receive
         {pes_packet, Packet} ->
-            <<1:24/integer, StreamId:8/integer, PesPacketLength:16/integer, Data/binary>> = Packet,
-            io:format("Write PES Data ~p StreamId ~p PES length ~p~n", [size(Packet), StreamId, PesPacketLength]),
+            <<1:24/integer,
+            StreamId:8/integer,
+            PesPacketLength:16/integer,
+            2#10:2,
+            _PESScramblingControl:2,
+            _PESPriority:1,
+            _DataAlignmentIndicator:1,
+            _Copyright:1,
+            _OriginalOrCopy:1,
+            _PTS_DTS_flags:2,
+            _ESCRFlag:1,
+            _ESRateFlag:1,
+            _DSMTrickModeFlag:1,
+            _AdditionalCopyInfoFlag:1,
+            _PESCRCFlag:1,
+            _PESExtensionFlag:1,
+            PESHeaderDataLength:8,
+            _/binary>> = Packet,
+            {_, Data} = split_binary(Packet, PESHeaderDataLength+9),
+            io:format("Write PES Data ~p StreamId ~p PES length ~p Header length ~p~n", [size(Packet), StreamId, PesPacketLength, PESHeaderDataLength]),
             case file:write(File, Data) of
                 ok ->
                     io:format("OK write to file: ~n", []),
