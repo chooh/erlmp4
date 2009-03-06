@@ -3,26 +3,27 @@
 %-compile([native]).
 
 -define(HOST, "192.168.4.110").
--define(PORT, 7000).
--define(PATH, "/stream/ntv.ts").
+-define(PORT, 7001).
+-define(PATH, "/stream/vesti.ts").
 
 % MP4Box -add video.264#video -add audio.aac#audio out.mp4
 
 start() ->
     Pid = start(?HOST, ?PORT, ?PATH),
     %VideoPesExPid = start_pes_extractor(start_pes_writer("video.264")),
+    VideoPesExPid = start_pes_extractor(spawn(?MODULE, nal_receiver, [[]])),
     %AudioPesExPid = start_pes_extractor(start_pes_writer("audio.aac")),
-    %Pid ! {demuxer, {subscribe, video, fun(P) -> P == 69 end, VideoPesExPid}},
-    %Pid ! {demuxer, {subscribe, audio, fun(P) -> P == 68 end, AudioPesExPid}},
-    DtsCounterPid = start_dts_counter(),
-    VideoPesExPid = start_pes_extractor(DtsCounterPid),
-    AudioPesExPid = start_pes_extractor(DtsCounterPid),
-    Pid ! {demuxer, {subscribe, video, fun(P) -> P == 101 end, VideoPesExPid}},
-    Pid ! {demuxer, {subscribe, audio, fun(P) -> P == 100 end, AudioPesExPid}},
+    Pid ! {demuxer, {subscribe, 69, VideoPesExPid}},
+    %Pid ! {demuxer, {subscribe, 68, AudioPesExPid}},
+    %DtsCounterPid = start_dts_counter(),
+    %VideoPesExPid = start_pes_extractor(DtsCounterPid),
+    %AudioPesExPid = start_pes_extractor(DtsCounterPid),
+    %Pid ! {demuxer, {subscribe, video, fun(P) -> P == 101 end, VideoPesExPid}},
+    %Pid ! {demuxer, {subscribe, audio, fun(P) -> P == 100 end, AudioPesExPid}},
     Pid.
 
 start(Host, Port, Path) ->
-    spawn(fun() -> http_connect(Host, Port, Path, spawn_link(fun() -> demuxer([]) end)) end).
+    spawn(fun() -> http_connect(Host, Port, Path, spawn_link(fun() -> demuxer(dict:new()) end)) end).
 
 http_connect(Host, Port, Path, DemuxerPid) ->
     {ok, Socket} = gen_tcp:connect(Host ,Port, [binary, {packet, 0}]),
@@ -59,7 +60,6 @@ synchronizer(Socket, Bin, DemuxerPid) when size(Bin) > 377 ->
             {Packet,Rest} = split_binary(Bin, 188),
             DemuxerPid ! {ts_packet, Packet},
             synchronizer(Socket, Rest, DemuxerPid);
-       % if we cannot find TS packet, skip one byte and try again
         _ ->
             {_, Rest} = split_binary(Bin, 1),
             synchronizer(Socket, Rest, DemuxerPid)
@@ -73,20 +73,17 @@ demuxer(State) ->
         {ts_packet, Packet} ->
             <<16#47:8, _:3, TsPid:13, _/binary>> = Packet,
             %io:format("Found TS Pid ~p~n", [TsPid]),
-            lists:foreach(fun({_Name, Fun, PesExtractorPid}) ->
-                case Fun(TsPid) of
-                    false -> ok;
-                    _ -> PesExtractorPid ! {ts_packet, Packet}
-                end
-            end, State),
+            case dict:find(TsPid, State) of
+                {ok, PesExtractorPid} ->
+                    PesExtractorPid ! {ts_packet, Packet};
+                error ->
+                    error
+            end,
             demuxer(State);
-        {subscribe, Name, Fun, PesExtractorPid} ->
-            demuxer(lists:keystore(Name, 1, State, {Name, Fun, PesExtractorPid}));
-        {unsubscribe, Name} ->
-            case lists:keytake(Name, 1, State) of
-                {value, _, NewState} -> demuxer(NewState);
-                false -> demuxer(State)
-            end
+        {subscribe, TsPid, PesExtractorPid} ->
+            demuxer(dict:store(TsPid, PesExtractorPid, State));
+        {unsubscribe, TsPid} ->
+            demuxer(dict:erase(TsPid, State))
     end.
 
 start_pes_extractor(PesProcessorPid) ->
@@ -151,7 +148,7 @@ pes_writer(File) ->
             io:format("Write PES Data ~p StreamId ~p PES length ~p Header length ~p~n", [size(Packet), StreamId, PesPacketLength, PESHeaderDataLength]),
             case file:write(File, Data) of
                 ok ->
-                    io:format("OK write to file: ~n", []),
+                    io:format("OK write to file~n~p~n", [Data]),
                     pes_writer(File);
                 {error, Reason} ->
                     io:format("Error write to file: ~p~n", [Reason]),
@@ -204,3 +201,121 @@ pes_dts_counter(Counter) ->
             end
     end.
 
+% TEST ONLY----
+start(FileName) ->
+    {ok, File} = file:open(FileName, [read,binary,raw]),
+    NalRcv = spawn(?MODULE, nal_receiver, [[]]),
+    feed_bytestream_file(File, NalRcv).
+
+feed_bytestream_file(File, Pid) ->
+    case file:read(File, 1024) of
+        {ok, Data} ->
+            Pid ! {raw, Data},
+            feed_bytestream_file(File, Pid);
+        eof ->
+            file:close(File)
+    end.
+
+nal_receiver(Buffer) ->
+    receive
+        {pes_packet, Packet} ->
+            <<1:24, _:24, 2#10:2, _:14, PESHeaderDataLength:8, _/binary>> = Packet,
+            {_, Data} = split_binary(Packet, PESHeaderDataLength+9),
+            nal_synchronizer(list_to_binary([Buffer, Data]));
+        {raw, Data} ->
+            nal_synchronizer(list_to_binary([Buffer, Data]))
+    end.
+
+nal_synchronizer(Buffer) ->
+    Offset1 = nal_unit_start_code_finder(Buffer, 0)+3,
+    Offset2 = nal_unit_start_code_finder(Buffer, Offset1+3),
+    case Offset2 of
+        false -> nal_receiver(Buffer);
+        _ ->
+            Length = Offset2-Offset1-1,
+            <<_:Offset1/binary, NAL:Length/binary, Rest/binary>> = Buffer,
+            decode_nal(NAL),
+            nal_synchronizer(Rest)
+    end.
+
+nal_unit_start_code_finder(Bin, Offset) when Offset < size(Bin) ->
+    case Bin of
+        <<_:Offset/binary, 16#000001:24, _/binary>> ->
+            Offset;
+        _ ->
+            nal_unit_start_code_finder(Bin, Offset + 1)
+    end;
+
+nal_unit_start_code_finder(_, _) -> false.
+
+decode_nal(Bin) ->
+    <<0:1, _NalRefIdc:2, NalUnitType:5, Rest/binary>> = Bin,
+    case NalUnitType of
+        7 ->
+            <<ProfileId:8, _:3, 0:5, Level:8, _/binary>> = Rest,
+            Profile = case ProfileId of
+                66 -> "Baseline";
+                77 -> "Main";
+                88 -> "Extended";
+                100 -> "High";
+                110 -> "High 10";
+                122 -> "High 4:2:2";
+                144 -> "High 4:4:4";
+                _ -> "Uknkown "++integer_to_list(ProfileId)
+            end,
+            io:format("Sequence parameter set ~p ~p~n", [Profile, Level/10]);
+        8 ->
+            io:format("Picture parameter set [~p]~n", [size(Bin)]);
+        1 ->
+            %io:format("Coded slice of a non-IDR picture :: "),
+            slice_header(Rest);
+        2 ->
+            %io:format("Coded slice data partition A     :: "),
+            slice_header(Rest);
+        5 ->
+            io:format("Coded slice of an IDR picture~n"),
+            slice_header(Rest);
+        9 ->
+            <<PrimaryPicTypeId:3, _:5, _/binary>> = Rest,
+            PrimaryPicType = case PrimaryPicTypeId of
+                0 -> "I";
+                1 -> "I, P";
+                2 -> "I, P, B";
+                3 -> "SI";
+                4 -> "SI, SP";
+                5 -> "I, SI";
+                6 -> "I, SI, P, SP";
+                7 -> "I, SI, P, SP, B"
+            end,
+            io:format("Access unit delimiter, PPT = ~p~n", [PrimaryPicType]);
+        _ -> ok
+    end.
+
+slice_header(Bin) ->
+    {_FirstMbInSlice, Rest} = exp_golomb_read(Bin),
+    {SliceTypeId, _ } = exp_golomb_read(Rest),
+    SliceType = case SliceTypeId of
+        0 -> "P";
+        1 -> "B";
+        2 -> "I";
+        3 -> "p";
+        4 -> "i";
+        5 -> "P";
+        6 -> "B";
+        7 -> "I";
+        8 -> "p";
+        9 -> "i"
+    end,
+    io:format("~s", [SliceType]).
+
+exp_golomb_read(Bin) ->
+    LeadingZeros = count_zeros(Bin,0),
+    <<0:LeadingZeros, 1:1, ReadBits:LeadingZeros, Rest/bitstring>> = Bin,
+    CodeNum = (1 bsl LeadingZeros) -1 + ReadBits,
+    {CodeNum, Rest}.
+
+count_zeros(Bin, Offset) ->
+    case Bin of
+        <<_:Offset, 1:1, _/bitstring>> -> Offset;
+        <<_:Offset, 0:1, _/bitstring>> -> count_zeros(Bin, Offset+1)
+    end.
